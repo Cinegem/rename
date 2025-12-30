@@ -19,16 +19,11 @@ AOV_MAP = {
 
 # ---------------- RENAME LOGIC ----------------
 def transform_filename(filename):
-    """
-    Example input:
-    G8R25CLAJRAYP611D12-TZRGL00009-Y-V1_Output AOV 3_0070.png
-    """
-
     pattern = r"([A-Za-z0-9]+-[A-Za-z0-9]+)-([A-Za-z]+)-V(\d+)_Output AOV (\d+)_\d+\.png"
     match = re.match(pattern, filename)
 
     if not match:
-        print("REGEX FAILED:", filename, flush=True)
+        print("SKIPPED (regex fail):", filename, flush=True)
         return None, None
 
     prefix, metal, version, aov_str = match.groups()
@@ -43,19 +38,19 @@ def transform_filename(filename):
     return final_name, folder_name
 
 
-# ---------------- PROCESS DIRECTORY (RECURSIVE) ----------------
-def process_directory(base_dir):
-    for root, _, files in os.walk(base_dir):
+# ---------------- PROCESS FILES ----------------
+def process_files(upload_dir, processed_dir):
+    for root, _, files in os.walk(upload_dir):
         for file in files:
             if not file.lower().endswith(".png"):
                 continue
 
             new_name, folder = transform_filename(file)
             if not new_name:
-                continue
+                continue  # ❌ HARD SKIP FAILED FILES
 
             src = os.path.join(root, file)
-            dst_folder = os.path.join(root, folder)
+            dst_folder = os.path.join(processed_dir, folder)
             os.makedirs(dst_folder, exist_ok=True)
 
             dst = os.path.join(dst_folder, new_name)
@@ -72,7 +67,7 @@ def process_directory(base_dir):
 @app.route('/')
 def index():
     return '''
-    <h2>Upload Folder (PNG files)</h2>
+    <h2>Upload Folder (PNG only)</h2>
     <form action="/process_directory" method="POST" enctype="multipart/form-data">
         <input type="file" name="files" webkitdirectory multiple required>
         <br><br>
@@ -90,34 +85,35 @@ def process_directory_route():
         return "No files uploaded", 400
 
     with tempfile.TemporaryDirectory() as temp_dir:
+        upload_dir = os.path.join(temp_dir, "upload")
+        processed_dir = os.path.join(temp_dir, "processed")
+
+        os.makedirs(upload_dir, exist_ok=True)
+        os.makedirs(processed_dir, exist_ok=True)
 
         # Save uploaded folder structure
         for file in uploaded_files:
-            relative_path = file.filename  # includes folder path
-            save_path = os.path.join(temp_dir, relative_path)
-
+            save_path = os.path.join(upload_dir, file.filename)
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             file.save(save_path)
 
         print("UPLOAD COMPLETE", flush=True)
 
-        # Run rename logic
-        process_directory(temp_dir)
+        # Process ONLY valid files
+        process_files(upload_dir, processed_dir)
 
-        # Zip output
+        # Zip ONLY processed files
         output_zip = os.path.join(temp_dir, "processed.zip")
         with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, _, files in os.walk(temp_dir):
+            for root, _, files in os.walk(processed_dir):
                 for f in files:
-                    if f == "processed.zip":
-                        continue
                     full_path = os.path.join(root, f)
                     zipf.write(
                         full_path,
-                        arcname=os.path.relpath(full_path, temp_dir)
+                        arcname=os.path.relpath(full_path, processed_dir)
                     )
 
-        print("PROCESS COMPLETE", flush=True)
+        print("PROCESS COMPLETE (CLEAN OUTPUT)", flush=True)
         return send_file(output_zip, as_attachment=True, download_name="processed.zip")
 
 
